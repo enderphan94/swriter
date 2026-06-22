@@ -580,9 +580,7 @@ final class AppStore: ObservableObject {
     static let welcomeMarkdown = """
     # Welcome to Swriter
 
-    A calm place to **write**, *read*, and keep notes — like working in a real
-    book. Everything you write is a plain Markdown file you own, kept in the
-    vault folder you chose.
+    A calm place to **write**, *read*, and keep notes — like working in a real book. You write visually, and every note is saved as a plain Markdown file you own.
 
     ## Writing
 
@@ -594,8 +592,7 @@ final class AppStore: ObservableObject {
     - [Links](https://ia.net/writer) — ⌘K
     - Headings — ⌘1 … ⌘3
 
-    > Markdown stays visible but quiet while you write, then renders to a clean
-    > page in Reading mode.
+    > Bold, headings, and images show as themselves — the Markdown stays in the background. Switch to Source view any time to see it.
 
     ## A table, because you can
 
@@ -607,8 +604,7 @@ final class AppStore: ObservableObject {
 
     ## Make a book
 
-    When a piece is ready, choose **File ▸ Export to PDF (A5)** to lay it out on
-    A5 pages — the standard size for a printed paperback.
+    When a piece is ready, choose **File ▸ Export to PDF (A5)** to lay it out on A5 pages — the standard size for a printed paperback.
 
     Happy writing.
     """

@@ -39,7 +39,9 @@ enum MarkdownRenderer {
                 let line = lines[i]
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-                if trimmed.isEmpty { i += 1; continue }
+                // Blank line → vertical space, so the paragraph breaks people
+                // make in the visual editor show up on the book page too.
+                if trimmed.isEmpty { appendBlankLine(); i += 1; continue }
 
                 // Fenced code block.
                 if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
@@ -107,17 +109,10 @@ enum MarkdownRenderer {
                     continue
                 }
 
-                // Paragraph: gather soft-wrapped lines until a blank/special line.
-                var para: [String] = [line]
+                // Paragraph — one line per paragraph, matching the visual editor
+                // (one Enter = one paragraph) so Write and Read look the same.
+                appendParagraph(line)
                 i += 1
-                while i < lines.count {
-                    let l = lines[i]
-                    let t = l.trimmingCharacters(in: .whitespaces)
-                    if t.isEmpty || heading(t) != nil || isRule(t) || t.hasPrefix(">")
-                        || listMarker(l) != nil || t.hasPrefix("```") || t.hasPrefix("~~~") { break }
-                    para.append(l); i += 1
-                }
-                appendParagraph(para.joined(separator: " "))
             }
             return out
         }
@@ -147,6 +142,14 @@ enum MarkdownRenderer {
             if forPrint { p.hyphenationFactor = 0.9 }
             out.append(inline(text, base: bodyAttrs(p)))
             out.append(NSAttributedString(string: "\n"))
+        }
+
+        /// An empty line — one per blank line in the source — so extra Returns
+        /// add real vertical space on the page.
+        private func appendBlankLine() {
+            let p = NSMutableParagraphStyle()
+            p.lineHeightMultiple = 1.4
+            out.append(NSAttributedString(string: "\n", attributes: [.font: Typeface.serif(size), .paragraphStyle: p]))
         }
 
         private func appendQuote(_ text: String) {
