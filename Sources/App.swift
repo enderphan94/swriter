@@ -84,11 +84,13 @@ struct SwriterApp: App {
         }
 
         CommandGroup(after: .toolbar) {
-            Button(store.mode == .write ? "Reading Mode" : "Writing Mode") {
-                store.mode = store.mode == .write ? .read : .write
-            }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(!store.hasDocument)
+            Button("Switch View Mode") { store.cycleMode() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!store.hasDocument)
+            Button("Writing Mode") { store.mode = .write }.disabled(!store.hasDocument)
+            Button("Split Mode") { store.mode = .split }.disabled(!store.hasDocument)
+            Button("Reading Mode") { store.mode = .read }.disabled(!store.hasDocument)
+            Divider()
 
             Button(store.focusMode ? "Turn Off Focus" : "Focus Mode") {
                 store.focusMode.toggle()

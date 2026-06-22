@@ -2,13 +2,44 @@ import Foundation
 
 /// A node in the vault tree: either a folder or a `.md` note. `children` is
 /// non-nil for folders (even when empty, so they stay expandable) and nil for
-/// notes — exactly what SwiftUI's `OutlineGroup` wants.
+/// notes.
 struct VaultItem: Identifiable, Hashable {
     let id: String          // POSIX path relative to the vault root
     let name: String        // display name — notes drop the ".md"
     let url: URL
     let isDirectory: Bool
+    let modified: Date
+    let created: Date
     var children: [VaultItem]?
+}
+
+/// Sidebar sort order, matching MarkView's six options.
+enum SortMode: String, CaseIterable, Identifiable {
+    case nameAsc, nameDesc, modifiedDesc, modifiedAsc, createdDesc, createdAsc
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .nameAsc:      return "Name A → Z"
+        case .nameDesc:     return "Name Z → A"
+        case .modifiedDesc: return "Modified (new first)"
+        case .modifiedAsc:  return "Modified (old first)"
+        case .createdDesc:  return "Created (new first)"
+        case .createdAsc:   return "Created (old first)"
+        }
+    }
+
+    /// Order two siblings of the same kind.
+    func sort(_ a: VaultItem, _ b: VaultItem) -> Bool {
+        switch self {
+        case .nameAsc:      return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        case .nameDesc:     return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedDescending
+        case .modifiedDesc: return a.modified > b.modified
+        case .modifiedAsc:  return a.modified < b.modified
+        case .createdDesc:  return a.created > b.created
+        case .createdAsc:   return a.created < b.created
+        }
+    }
 }
 
 /// A *vault* is one folder on disk that the user picks. Notes are plain `.md`
@@ -30,12 +61,14 @@ struct Vault {
 
     // MARK: Tree
 
-    /// The full vault as a sorted tree (folders first, then notes, each A→Z).
-    func tree() -> [VaultItem] { items(in: root) }
+    /// The full vault as a tree — folders first, then notes, each group ordered
+    /// by `sort`.
+    func tree(sort: SortMode = .nameAsc) -> [VaultItem] { items(in: root, sort: sort) }
 
-    private func items(in dir: URL) -> [VaultItem] {
+    private func items(in dir: URL, sort: SortMode) -> [VaultItem] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey, .creationDateKey]
         guard let entries = try? fm.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [])
+            at: dir, includingPropertiesForKeys: keys, options: [])
         else { return [] }
 
         var folders: [VaultItem] = []
@@ -43,20 +76,21 @@ struct Vault {
         for url in entries {
             let name = url.lastPathComponent
             if hidden(name) { continue }
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: url.path, isDirectory: &isDir)
-            if isDir.boolValue {
+            let vals = try? url.resourceValues(forKeys: Set(keys))
+            let modified = vals?.contentModificationDate ?? .distantPast
+            let created = vals?.creationDate ?? .distantPast
+            if vals?.isDirectory == true {
                 folders.append(VaultItem(
-                    id: rel(url), name: name, url: url,
-                    isDirectory: true, children: items(in: url)))
+                    id: rel(url), name: name, url: url, isDirectory: true,
+                    modified: modified, created: created, children: items(in: url, sort: sort)))
             } else if name.lowercased().hasSuffix(".md") {
                 notes.append(VaultItem(
-                    id: rel(url), name: String(name.dropLast(3)), url: url,
-                    isDirectory: false, children: nil))
+                    id: rel(url), name: String(name.dropLast(3)), url: url, isDirectory: false,
+                    modified: modified, created: created, children: nil))
             }
         }
-        folders.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        notes.sort   { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        folders.sort(by: sort.sort)
+        notes.sort(by: sort.sort)
         return folders + notes
     }
 
@@ -93,6 +127,15 @@ struct Vault {
 
     func delete(_ item: VaultItem) {
         try? fm.trashItem(at: item.url, resultingItemURL: nil)
+    }
+
+    @discardableResult
+    func duplicate(_ item: VaultItem) throws -> URL {
+        let dir = item.url.deletingLastPathComponent()
+        let ext = item.isDirectory ? nil : "md"
+        let dst = unique(in: dir, base: NameUtil.slug(item.name) + " copy", ext: ext)
+        try fm.copyItem(at: item.url, to: dst)
+        return dst
     }
 
     func read(_ url: URL) -> String {

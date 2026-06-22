@@ -1,15 +1,26 @@
 import SwiftUI
+import AppKit
 
-/// The working window: vault sidebar on the left, the writing/reading pane on
-/// the right, a formatting bar while writing, and a quiet status line.
+/// The working window: a resizable vault sidebar, then the writing pane —
+/// Writing, a resizable Split (editor | live preview), or Reading — with a
+/// formatting bar while editing and a quiet status line.
 struct MainView: View {
     @EnvironmentObject var store: AppStore
+    @State private var baseSidebar: CGFloat?
+    @State private var baseRatio: CGFloat?
 
     var body: some View {
         HStack(spacing: 0) {
             if store.sidebarVisible {
-                SidebarView()
-                Divider()
+                SidebarView().frame(width: store.sidebarWidth)
+                ResizeHandle(
+                    onDrag: { tx in
+                        let base = baseSidebar ?? store.sidebarWidth
+                        if baseSidebar == nil { baseSidebar = base }
+                        store.sidebarWidth = min(520, max(180, base + tx))
+                    },
+                    onEnd: { baseSidebar = nil; store.persistSidebarWidth() },
+                    onDoubleClick: { store.sidebarWidth = 250; store.persistSidebarWidth() })
             }
             content
         }
@@ -19,10 +30,7 @@ struct MainView: View {
     @ViewBuilder private var content: some View {
         VStack(spacing: 0) {
             if store.hasDocument {
-                if store.mode == .write {
-                    FormattingBar()
-                    Divider()
-                }
+                if store.mode != .read { FormattingBar(); Divider() }
                 pane
                 Divider()
                 StatusBar()
@@ -35,18 +43,41 @@ struct MainView: View {
     }
 
     @ViewBuilder private var pane: some View {
-        if store.mode == .write {
-            MarkdownEditor(
-                docID: store.docID,
-                initialText: store.text,
-                theme: store.theme,
-                fontSize: store.fontSize,
-                focusMode: store.focusMode,
-                onChange: { store.onTextChanged($0) },
-                onActivate: { store.activeTextView = $0 })
-        } else {
-            ReadingView(markdown: store.text, theme: store.theme, bodySize: store.fontSize)
+        switch store.mode {
+        case .write: editorView
+        case .read:  readingView
+        case .split:
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    editorView.frame(width: max(280, geo.size.width * store.splitRatio))
+                    ResizeHandle(
+                        onDrag: { tx in
+                            let base = baseRatio ?? store.splitRatio
+                            if baseRatio == nil { baseRatio = base }
+                            store.splitRatio = min(0.8, max(0.25, base + tx / max(1, geo.size.width)))
+                        },
+                        onEnd: { baseRatio = nil; store.persistSplitRatio() },
+                        onDoubleClick: { store.splitRatio = 0.5; store.persistSplitRatio() })
+                    readingView
+                }
+            }
         }
+    }
+
+    private var editorView: some View {
+        MarkdownEditor(
+            docID: store.docID,
+            initialText: store.text,
+            theme: store.theme,
+            fontSize: store.fontSize,
+            focusMode: store.focusMode,
+            onChange: { store.onTextChanged($0) },
+            onActivate: { store.activeTextView = $0 })
+    }
+
+    private var readingView: some View {
+        ReadingView(markdown: store.text, theme: store.theme, bodySize: store.fontSize)
+            .frame(maxWidth: .infinity)
     }
 
     private var placeholder: some View {
@@ -63,22 +94,19 @@ struct MainView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            Button { store.sidebarVisible.toggle() } label: {
-                Image(systemName: "sidebar.left")
-            }
-            .help("Toggle Sidebar")
+            Button { store.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
+                .help("Toggle Sidebar (⌘\\)")
         }
-
         ToolbarItem(placement: .principal) {
             Text(store.documentTitle).font(.headline)
         }
-
         ToolbarItemGroup(placement: .primaryAction) {
             Picker("", selection: $store.mode) {
                 Image(systemName: "pencil").tag(Mode.write)
+                Image(systemName: "rectangle.split.2x1").tag(Mode.split)
                 Image(systemName: "book").tag(Mode.read)
             }
-            .pickerStyle(.segmented).help("Writing / Reading")
+            .pickerStyle(.segmented).help("Writing / Split / Reading")
             .disabled(!store.hasDocument)
 
             Button { store.focusMode.toggle() } label: {
@@ -88,21 +116,47 @@ struct MainView: View {
 
             Menu {
                 ForEach(WriterTheme.allCases) { t in
-                    Button { store.theme = t } label: {
-                        Label(t.title, systemImage: t.symbol)
-                    }
+                    Button { store.theme = t } label: { Label(t.title, systemImage: t.symbol) }
                 }
             } label: {
                 Image(systemName: store.theme.symbol)
             }
             .help("Theme")
 
-            Button { store.exportPDF() } label: {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .help("Export to PDF (A5)")
-            .disabled(!store.hasDocument)
+            Button { store.exportPDF() } label: { Image(systemName: "square.and.arrow.up") }
+                .help("Export to PDF (A5)")
+                .disabled(!store.hasDocument)
         }
+    }
+}
+
+/// A draggable gutter between two panels. Reports the cumulative drag so the
+/// caller can apply it to a width captured at gesture start; double-click resets.
+struct ResizeHandle: View {
+    let onDrag: (CGFloat) -> Void
+    let onEnd: () -> Void
+    let onDoubleClick: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 8)
+            .frame(maxHeight: .infinity)
+            .overlay(
+                Rectangle()
+                    .fill(hovering ? Color.accentColor : Color.gray.opacity(0.22))
+                    .frame(width: hovering ? 2 : 1))
+            .contentShape(Rectangle())
+            .onHover { h in
+                hovering = h
+                if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { onDrag($0.translation.width) }
+                    .onEnded { _ in onEnd() })
+            .onTapGesture(count: 2, perform: onDoubleClick)
     }
 }
 
@@ -125,7 +179,7 @@ struct FormattingBar: View {
                 } label: {
                     Image(systemName: "textformat.size")
                 }
-                .menuStyle(.borderlessButton).frame(width: 38).help("Heading")
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 38).help("Heading")
                 bar
                 btn("list.bullet", "Bulleted List (⇧⌘8)") { store.format(.bulletList) }
                 btn("list.number", "Numbered List (⇧⌘7)") { store.format(.numberList) }
@@ -142,10 +196,8 @@ struct FormattingBar: View {
     }
 
     private func btn(_ icon: String, _ help: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).frame(width: 26, height: 22)
-        }
-        .buttonStyle(.borderless).help(help)
+        Button(action: action) { Image(systemName: icon).frame(width: 26, height: 22) }
+            .buttonStyle(.borderless).help(help)
     }
 
     private var bar: some View {
@@ -168,9 +220,7 @@ struct StatusBar: View {
             }
             Spacer()
             HStack(spacing: 4) {
-                Circle()
-                    .fill(store.dirty ? Color.orange : Color.green)
-                    .frame(width: 6, height: 6)
+                Circle().fill(store.dirty ? Color.orange : Color.green).frame(width: 6, height: 6)
                 Text(store.dirty ? "Editing…" : "Saved")
             }
             Text("·")

@@ -3,7 +3,22 @@ import AppKit
 import Combine
 
 /// What the main pane shows.
-enum Mode: String { case write, read }
+enum Mode: String, CaseIterable { case write, split, read }
+
+/// A registered vault the user can switch to in-app (MarkView's workspaces).
+/// We only remember the pointer — forgetting one never touches the files.
+struct Workspace: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var path: String
+}
+
+/// One visible row of the (flattened) sidebar tree, with its nesting depth.
+struct TreeRow: Identifiable {
+    let item: VaultItem
+    let depth: Int
+    var id: String { item.id }
+}
 
 /// Drives the About window's update UI.
 enum UpdateState {
@@ -21,6 +36,7 @@ final class AppStore: ObservableObject {
     // Vault
     @Published private(set) var vaultURL: URL?
     @Published private(set) var tree: [VaultItem] = []
+    @Published private(set) var workspaces: [Workspace] = []
     private var vault: Vault?
 
     // Open document
@@ -39,6 +55,18 @@ final class AppStore: ObservableObject {
     @Published var focusMode: Bool = false
     @Published var sidebarVisible: Bool = true
 
+    // Sidebar state
+    @Published var sortMode: SortMode = .nameAsc {
+        didSet { persist(sortMode.rawValue, sortKey); refreshTree() }
+    }
+    @Published var searchQuery: String = ""
+    /// Folder ids currently expanded in the tree (persisted per vault).
+    @Published var expandedFolders: Set<String> = []
+
+    // Panel sizing
+    @Published var sidebarWidth: CGFloat = 250
+    @Published var splitRatio: CGFloat = 0.5   // editor's share of the split view
+
     // Updates
     @Published var showAbout: Bool = false
     @Published var updateState: UpdateState = .idle
@@ -52,6 +80,11 @@ final class AppStore: ObservableObject {
     private let vaultKey = "SwriterVaultPath"
     private let themeKey = "SwriterTheme"
     private let fontKey  = "SwriterFontSize"
+    private let sortKey  = "SwriterSortMode"
+    private let widthKey = "SwriterSidebarWidth"
+    private let splitKey = "SwriterSplitRatio"
+    private let workspacesKey = "SwriterWorkspaces"
+    private let expandedKey = "SwriterExpandedByVault"
     private var saveWork: DispatchWorkItem?
 
     var hasVault: Bool { vault != nil }
@@ -60,11 +93,16 @@ final class AppStore: ObservableObject {
     // MARK: Bootstrap
 
     func bootstrap() {
-        if let raw = UserDefaults.standard.string(forKey: themeKey),
-           let t = WriterTheme(rawValue: raw) { theme = t }
-        let savedFont = UserDefaults.standard.double(forKey: fontKey)
+        let d = UserDefaults.standard
+        if let raw = d.string(forKey: themeKey), let t = WriterTheme(rawValue: raw) { theme = t }
+        let savedFont = d.double(forKey: fontKey)
         if savedFont >= 11 && savedFont <= 32 { fontSize = CGFloat(savedFont) }
-        if let saved = UserDefaults.standard.string(forKey: vaultKey) {
+        if let raw = d.string(forKey: sortKey), let s = SortMode(rawValue: raw) { sortMode = s }
+        let w = d.double(forKey: widthKey); if w >= 180 && w <= 520 { sidebarWidth = CGFloat(w) }
+        let sr = d.double(forKey: splitKey); if sr >= 0.25 && sr <= 0.8 { splitRatio = CGFloat(sr) }
+        loadWorkspaces()
+
+        if let saved = d.string(forKey: vaultKey) {
             let url = URL(fileURLWithPath: saved)
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
@@ -86,10 +124,14 @@ final class AppStore: ObservableObject {
     }
 
     func openVault(at url: URL) {
+        flush()
         let v = Vault(root: url)
         vault = v
         vaultURL = url
         UserDefaults.standard.set(url.path, forKey: vaultKey)
+        registerWorkspace(for: url)
+        loadExpanded(for: url)
+        searchQuery = ""
         refreshTree()
         closeDocument()
     }
@@ -99,11 +141,12 @@ final class AppStore: ObservableObject {
         vault = nil
         vaultURL = nil
         tree = []
+        expandedFolders = []
         closeDocument()
         UserDefaults.standard.removeObject(forKey: vaultKey)
     }
 
-    func refreshTree() { tree = vault?.tree() ?? [] }
+    func refreshTree() { tree = vault?.tree(sort: sortMode) ?? [] }
 
     func revealInFinder() {
         guard let url = currentURL ?? vaultURL else { return }
@@ -176,19 +219,35 @@ final class AppStore: ObservableObject {
         return vault?.root ?? vaultURL ?? FileManager.default.homeDirectoryForCurrentUser
     }
 
-    func newNote(in item: VaultItem? = nil, named: String = "Untitled") {
-        guard let v = vault else { return }
+    /// Create a note and return its tree id so the sidebar can drop straight
+    /// into inline rename (MarkView's behaviour).
+    @discardableResult
+    func newNote(in item: VaultItem? = nil, named: String = "Untitled") -> String? {
+        guard let v = vault else { return nil }
         let dir = targetDir(for: item)
-        guard let url = try? v.createNote(named: named, in: dir) else { return }
+        guard let url = try? v.createNote(named: named, in: dir) else { return nil }
+        if let item, item.isDirectory { expandedFolders.insert(item.id); saveExpanded() }
         refreshTree()
         openNote(at: url)
+        return relativeID(url)
     }
 
-    func newFolder(in item: VaultItem? = nil, named: String = "New Folder") {
-        guard let v = vault else { return }
+    @discardableResult
+    func newFolder(in item: VaultItem? = nil, named: String = "New Folder") -> String? {
+        guard let v = vault else { return nil }
         let dir = targetDir(for: item)
-        _ = try? v.createFolder(named: named, in: dir)
+        guard let url = try? v.createFolder(named: named, in: dir) else { return nil }
+        if let item, item.isDirectory { expandedFolders.insert(item.id); saveExpanded() }
         refreshTree()
+        return relativeID(url)
+    }
+
+    @discardableResult
+    func duplicate(_ item: VaultItem) -> String? {
+        guard let v = vault, let url = try? v.duplicate(item) else { return nil }
+        refreshTree()
+        if !item.isDirectory { openNote(at: url) }
+        return relativeID(url)
     }
 
     func rename(_ item: VaultItem, to newName: String) {
@@ -204,8 +263,176 @@ final class AppStore: ObservableObject {
         let affectsOpen = currentURL == item.url ||
             (item.isDirectory && currentURL?.path.hasPrefix(item.url.path) == true)
         v.delete(item)
+        expandedFolders.remove(item.id)
         refreshTree()
         if affectsOpen { closeDocument() }
+    }
+
+    private func relativeID(_ url: URL) -> String {
+        guard let root = vaultURL?.standardizedFileURL.path else { return url.lastPathComponent }
+        let p = url.standardizedFileURL.path
+        return p.hasPrefix(root)
+            ? String(p.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            : url.lastPathComponent
+    }
+
+    // MARK: Sidebar — search, expand, flatten
+
+    var isSearching: Bool { !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// The tree to display: full, or pruned to search matches plus their
+    /// ancestor folders.
+    var filteredTree: [VaultItem] {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return tree }
+        return prune(tree, query: q)
+    }
+
+    private func prune(_ items: [VaultItem], query: String) -> [VaultItem] {
+        var out: [VaultItem] = []
+        for item in items {
+            if item.isDirectory {
+                let kids = prune(item.children ?? [], query: query)
+                if item.name.localizedCaseInsensitiveContains(query) || !kids.isEmpty {
+                    var copy = item; copy.children = kids; out.append(copy)
+                }
+            } else if item.name.localizedCaseInsensitiveContains(query) {
+                out.append(item)
+            }
+        }
+        return out
+    }
+
+    /// The visible rows, flattened with their depth. Folders open by saved
+    /// state, or all-open while searching so matches always show.
+    func visibleRows() -> [TreeRow] {
+        var rows: [TreeRow] = []
+        let searching = isSearching
+        func walk(_ items: [VaultItem], _ depth: Int) {
+            for item in items {
+                rows.append(TreeRow(item: item, depth: depth))
+                if item.isDirectory, searching || expandedFolders.contains(item.id) {
+                    walk(item.children ?? [], depth + 1)
+                }
+            }
+        }
+        walk(filteredTree, 0)
+        return rows
+    }
+
+    /// Find a tree item by its id (used to commit an inline rename).
+    func findItem(_ id: String) -> VaultItem? {
+        func search(_ items: [VaultItem]) -> VaultItem? {
+            for it in items {
+                if it.id == id { return it }
+                if let c = it.children, let f = search(c) { return f }
+            }
+            return nil
+        }
+        return search(tree)
+    }
+
+    func isExpanded(_ id: String) -> Bool { expandedFolders.contains(id) }
+
+    func toggleExpand(_ id: String) {
+        if expandedFolders.contains(id) { expandedFolders.remove(id) } else { expandedFolders.insert(id) }
+        saveExpanded()
+    }
+
+    var anyExpanded: Bool { !expandedFolders.isEmpty }
+
+    func expandAll()   { expandedFolders = allFolderIDs(tree); saveExpanded() }
+    func collapseAll() { expandedFolders = []; saveExpanded() }
+
+    private func allFolderIDs(_ items: [VaultItem]) -> Set<String> {
+        var s = Set<String>()
+        for it in items where it.isDirectory {
+            s.insert(it.id); s.formUnion(allFolderIDs(it.children ?? []))
+        }
+        return s
+    }
+
+    private func loadExpanded(for url: URL) {
+        let all = (UserDefaults.standard.dictionary(forKey: expandedKey) as? [String: [String]]) ?? [:]
+        expandedFolders = Set(all[url.path] ?? [])
+    }
+
+    private func saveExpanded() {
+        guard let path = vaultURL?.path else { return }
+        var all = (UserDefaults.standard.dictionary(forKey: expandedKey) as? [String: [String]]) ?? [:]
+        all[path] = Array(expandedFolders)
+        UserDefaults.standard.set(all, forKey: expandedKey)
+    }
+
+    // MARK: Panel sizing
+
+    func persistSidebarWidth() { persist(Double(sidebarWidth), widthKey) }
+    func persistSplitRatio()   { persist(Double(splitRatio), splitKey) }
+
+    func cycleMode() {
+        let all = Mode.allCases
+        if let i = all.firstIndex(of: mode) { mode = all[(i + 1) % all.count] }
+    }
+
+    // MARK: Workspaces (in-app vault switching)
+
+    var activeWorkspaceID: String? {
+        guard let p = vaultURL?.path else { return nil }
+        return workspaces.first { $0.path == p }?.id
+    }
+
+    private func loadWorkspaces() {
+        if let data = UserDefaults.standard.data(forKey: workspacesKey),
+           let list = try? JSONDecoder().decode([Workspace].self, from: data) {
+            workspaces = list
+        }
+    }
+
+    private func saveWorkspaces() {
+        if let data = try? JSONEncoder().encode(workspaces) {
+            UserDefaults.standard.set(data, forKey: workspacesKey)
+        }
+    }
+
+    private func registerWorkspace(for url: URL) {
+        guard !workspaces.contains(where: { $0.path == url.path }) else { return }
+        workspaces.append(Workspace(id: "ws_" + String(UUID().uuidString.prefix(8)),
+                                    name: url.lastPathComponent, path: url.path))
+        saveWorkspaces()
+    }
+
+    func switchWorkspace(_ id: String) {
+        guard let ws = workspaces.first(where: { $0.id == id }) else { return }
+        let url = URL(fileURLWithPath: ws.path)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+            removeWorkspace(id); return   // folder vanished — forget the stale pointer
+        }
+        if url.path != vaultURL?.path { openVault(at: url) }
+    }
+
+    func renameWorkspace(_ id: String, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let i = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        workspaces[i].name = clean
+        saveWorkspaces()
+    }
+
+    func removeWorkspace(_ id: String) {
+        let wasActive = id == activeWorkspaceID
+        workspaces.removeAll { $0.id == id }
+        saveWorkspaces()
+        if wasActive {
+            if let first = workspaces.first { openVault(at: URL(fileURLWithPath: first.path)) }
+            else { closeVault() }
+        }
+    }
+
+    /// Register a folder as a vault and switch to it (optionally creating it).
+    func addVault(at url: URL, create: Bool) {
+        if create { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        openVault(at: url)
+        if create { seedWelcomeIfEmpty() }
     }
 
     // MARK: Derived stats
