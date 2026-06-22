@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="Swriter"
 BUNDLE_ID="com.enderphan.swriter"
-VERSION="1.1.0"
+VERSION="1.1.1"
 MIN_OS="13.0"
 TARGET="arm64-apple-macosx${MIN_OS}"
 
