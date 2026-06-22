@@ -3,8 +3,9 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 
-/// What the main pane shows.
-enum Mode: String, CaseIterable { case write, split, read }
+/// What the main pane shows: visual writing, raw Markdown source, or the book
+/// reading view.
+enum Mode: String, CaseIterable { case write, source, read }
 
 /// A registered vault the user can switch to in-app (MarkView's workspaces).
 /// We only remember the pointer — forgetting one never touches the files.
@@ -66,7 +67,6 @@ final class AppStore: ObservableObject {
 
     // Panel sizing
     @Published var sidebarWidth: CGFloat = 250
-    @Published var splitRatio: CGFloat = 0.5   // editor's share of the split view
 
     // Updates
     @Published var showAbout: Bool = false
@@ -83,7 +83,6 @@ final class AppStore: ObservableObject {
     private let fontKey  = "SwriterFontSize"
     private let sortKey  = "SwriterSortMode"
     private let widthKey = "SwriterSidebarWidth"
-    private let splitKey = "SwriterSplitRatio"
     private let workspacesKey = "SwriterWorkspaces"
     private let expandedKey = "SwriterExpandedByVault"
     private var saveWork: DispatchWorkItem?
@@ -100,7 +99,6 @@ final class AppStore: ObservableObject {
         if savedFont >= 11 && savedFont <= 32 { fontSize = CGFloat(savedFont) }
         if let raw = d.string(forKey: sortKey), let s = SortMode(rawValue: raw) { sortMode = s }
         let w = d.double(forKey: widthKey); if w >= 180 && w <= 520 { sidebarWidth = CGFloat(w) }
-        let sr = d.double(forKey: splitKey); if sr >= 0.25 && sr <= 0.8 { splitRatio = CGFloat(sr) }
         loadWorkspaces()
 
         if let saved = d.string(forKey: vaultKey) {
@@ -301,35 +299,44 @@ final class AppStore: ObservableObject {
 
     // MARK: Images
 
-    /// Paste handler: if the pasteboard holds an image, save it into the vault
-    /// and return the Markdown to insert; otherwise nil (normal paste proceeds).
-    func insertImageFromPasteboard(_ pb: NSPasteboard) -> String? {
-        guard let note = currentURL, let (data, ext) = Self.imageData(from: pb) else { return nil }
-        return snippet(forImageData: data, ext: ext, base: "image", note: note)
+    /// Save image bytes into the vault and return the path relative to the note.
+    private func saveImageBytes(_ data: Data, ext: String, base: String) -> String? {
+        guard let v = vault, let note = currentURL,
+              let rel = try? v.saveImage(data, ext: ext, base: base, noteURL: note) else { return nil }
+        refreshTree()
+        return rel
     }
 
-    /// "Insert Image…" — copy chosen files into the vault and insert references.
+    /// Paste handler: save a pasted image and return its vault-relative path
+    /// (the rich editor turns it into an inline picture).
+    func savePastedImage(_ pb: NSPasteboard) -> String? {
+        guard let (data, ext) = Self.imageData(from: pb) else { return nil }
+        return saveImageBytes(data, ext: ext, base: "image")
+    }
+
+    /// Source-mode paste: returns Markdown to insert, or nil for a normal paste.
+    func insertImageFromPasteboard(_ pb: NSPasteboard) -> String? {
+        savePastedImage(pb).map { "![](\($0))" }
+    }
+
+    /// "Insert Image…" — copy chosen files in and insert them into the active
+    /// editor (as a picture in Write mode, as Markdown in Source mode).
     func importImage() {
-        guard hasDocument, let note = currentURL, let tv = activeTextView else { NSSound.beep(); return }
+        guard hasDocument, let tv = activeTextView else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.title = "Insert Image"
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return }
-        let snippets = panel.urls.compactMap { url -> String? in
-            guard let data = try? Data(contentsOf: url) else { return nil }
+        for url in panel.urls {
+            guard let data = try? Data(contentsOf: url) else { continue }
             let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
-            return snippet(forImageData: data, ext: ext,
-                           base: url.deletingPathExtension().lastPathComponent, note: note)
+            guard let rel = saveImageBytes(data, ext: ext,
+                                           base: url.deletingPathExtension().lastPathComponent) else { continue }
+            if let rt = tv as? RichTextView { rt.insertImage(path: rel, alt: "") }
+            else { MarkdownFormatter.insertImage("![](\(rel))", into: tv) }
         }
-        if !snippets.isEmpty { MarkdownFormatter.insertImage(snippets.joined(separator: "\n\n"), into: tv) }
-    }
-
-    private func snippet(forImageData data: Data, ext: String, base: String, note: URL) -> String? {
-        guard let v = vault, let rel = try? v.saveImage(data, ext: ext, base: base, noteURL: note) else { return nil }
-        refreshTree()
-        return "![](\(rel))"
     }
 
     /// Pull image bytes from a pasteboard: PNG, TIFF (→PNG), or a copied image file.
@@ -441,7 +448,6 @@ final class AppStore: ObservableObject {
     // MARK: Panel sizing
 
     func persistSidebarWidth() { persist(Double(sidebarWidth), widthKey) }
-    func persistSplitRatio()   { persist(Double(splitRatio), splitKey) }
 
     func cycleMode() {
         let all = Mode.allCases

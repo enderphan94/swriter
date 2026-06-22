@@ -90,7 +90,7 @@ struct SwriterApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!store.hasDocument)
             Button("Writing Mode") { store.mode = .write }.disabled(!store.hasDocument)
-            Button("Split Mode") { store.mode = .split }.disabled(!store.hasDocument)
+            Button("Source (Markdown)") { store.mode = .source }.disabled(!store.hasDocument)
             Button("Reading Mode") { store.mode = .read }.disabled(!store.hasDocument)
             Divider()
 

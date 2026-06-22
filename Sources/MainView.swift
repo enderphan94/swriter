@@ -1,13 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// The working window: a resizable vault sidebar, then the writing pane —
-/// Writing, a resizable Split (editor | live preview), or Reading — with a
-/// formatting bar while editing and a quiet status line.
+/// The working window: a resizable vault sidebar, then the pane — visual
+/// Writing, raw Markdown Source, or book Reading — with a formatting bar while
+/// editing and a quiet status line.
 struct MainView: View {
     @EnvironmentObject var store: AppStore
     @State private var baseSidebar: CGFloat?
-    @State private var baseRatio: CGFloat?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -44,27 +43,27 @@ struct MainView: View {
 
     @ViewBuilder private var pane: some View {
         switch store.mode {
-        case .write: editorView
-        case .read:  readingView
-        case .split:
-            GeometryReader { geo in
-                HStack(spacing: 0) {
-                    editorView.frame(width: max(280, geo.size.width * store.splitRatio))
-                    ResizeHandle(
-                        onDrag: { tx in
-                            let base = baseRatio ?? store.splitRatio
-                            if baseRatio == nil { baseRatio = base }
-                            store.splitRatio = min(0.8, max(0.25, base + tx / max(1, geo.size.width)))
-                        },
-                        onEnd: { baseRatio = nil; store.persistSplitRatio() },
-                        onDoubleClick: { store.splitRatio = 0.5; store.persistSplitRatio() })
-                    readingView
-                }
-            }
+        case .write:  richEditor
+        case .source: sourceEditor
+        case .read:   readingView
         }
     }
 
-    private var editorView: some View {
+    /// Visual (WYSIWYG) writing — the default.
+    private var richEditor: some View {
+        RichEditor(
+            docID: store.docID,
+            markdown: store.text,
+            theme: store.theme,
+            fontSize: store.fontSize,
+            baseURL: store.currentURL?.deletingLastPathComponent(),
+            onChange: { store.onTextChanged($0) },
+            onActivate: { store.activeTextView = $0 },
+            onImageSave: { store.savePastedImage($0) })
+    }
+
+    /// Raw Markdown source — the technical view.
+    private var sourceEditor: some View {
         MarkdownEditor(
             docID: store.docID,
             initialText: store.text,
@@ -104,11 +103,11 @@ struct MainView: View {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Picker("", selection: $store.mode) {
-                Image(systemName: "pencil").tag(Mode.write)
-                Image(systemName: "rectangle.split.2x1").tag(Mode.split)
+                Image(systemName: "textformat").tag(Mode.write)
+                Image(systemName: "chevron.left.forwardslash.chevron.right").tag(Mode.source)
                 Image(systemName: "book").tag(Mode.read)
             }
-            .pickerStyle(.segmented).help("Writing / Split / Reading")
+            .pickerStyle(.segmented).help("Writing / Source / Reading")
             .disabled(!store.hasDocument)
 
             Button { store.focusMode.toggle() } label: {

@@ -199,9 +199,14 @@ enum MarkdownFormatter {
 }
 
 extension AppStore {
-    /// Run a formatting command against the focused editor.
+    /// Run a formatting command against the focused editor — visually on the
+    /// rich editor, or by inserting Markdown in Source mode.
     func format(_ action: FormatAction) {
         guard let tv = activeTextView else { NSSound.beep(); return }
-        MarkdownFormatter.apply(action, to: tv)
+        if let rt = tv as? RichTextView {
+            RichFormatter.apply(action, to: rt, theme: theme, size: fontSize)
+        } else {
+            MarkdownFormatter.apply(action, to: tv)
+        }
     }
 }
