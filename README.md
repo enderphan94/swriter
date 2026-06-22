@@ -25,10 +25,18 @@ There is no account, no cloud service, and no tracking.
   tables, code blocks, and horizontal rules.
 - **Reading mode** — your note rendered in a serif face with real headings,
   block quotes, lists, fenced code, and proper tables.
+- **Split view** — editor and live preview side by side, with a draggable,
+  remembered divider. The sidebar width is draggable too (double-click a
+  divider to reset).
 - **A5 PDF export** — paginated onto 148 × 210 mm pages with margins and page
   numbers, ready for book printing.
-- **Vault** — a folder of `.md` files with a tree sidebar; create, rename, and
-  organize notes and folders.
+- **Vault** — a folder of `.md` files with a tree sidebar. Right-click for New
+  Note / New Folder / Rename / Duplicate / Reveal in Finder / Move to Trash;
+  double-click to rename inline; search, sort (name / modified / created), and
+  expand-or-collapse all.
+- **Switch vaults in-app** — a workspace dropdown in the sidebar header to
+  switch between vaults, add or create new ones, rename, or remove one from the
+  list (which only forgets the pointer — your files are never deleted).
 - **Three themes** — Light, Sepia, and Dark.
 - **Self-update** — checks GitHub Releases on launch and offers a one-click
   update, with a manual check in **About Swriter**.
@@ -41,7 +49,7 @@ There is no account, no cloud service, and no tracking.
 | Italic | ⌘I | New Folder | ⇧⌘N |
 | Inline code | ⌘E | Save | ⌘S |
 | Strikethrough | ⇧⌘X | Export to PDF (A5) | ⇧⌘E |
-| Heading 1–3 | ⌘1 / ⌘2 / ⌘3 | Writing / Reading | ⇧⌘R |
+| Heading 1–3 | ⌘1 / ⌘2 / ⌘3 | Cycle view (Write/Split/Read) | ⇧⌘R |
 | Bulleted list | ⇧⌘8 | Focus mode | ⇧⌘F |
 | Numbered list | ⇧⌘7 | Toggle sidebar | ⌘\ |
 | Quote | ⇧⌘' | Bigger / smaller text | ⌘+ / ⌘- |
