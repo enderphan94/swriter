@@ -10,9 +10,11 @@ enum MarkdownRenderer {
 
     /// - forPrint: justify and hyphenate body text for a printed page; left-align
     ///   for comfortable on-screen reading.
+    /// - baseURL: the note's folder, so relative image paths resolve.
     static func attributed(_ markdown: String, theme: WriterTheme,
-                           bodySize: CGFloat, forPrint: Bool) -> NSAttributedString {
-        Builder(theme: theme, size: bodySize, forPrint: forPrint).build(markdown)
+                           bodySize: CGFloat, forPrint: Bool,
+                           baseURL: URL? = nil) -> NSAttributedString {
+        Builder(theme: theme, size: bodySize, forPrint: forPrint, baseURL: baseURL).build(markdown)
     }
 
     // MARK: - Builder
@@ -21,11 +23,12 @@ enum MarkdownRenderer {
         let theme: WriterTheme
         let size: CGFloat
         let forPrint: Bool
+        let baseURL: URL?
         let ink: NSColor
         let out = NSMutableAttributedString()
 
-        init(theme: WriterTheme, size: CGFloat, forPrint: Bool) {
-            self.theme = theme; self.size = size; self.forPrint = forPrint
+        init(theme: WriterTheme, size: CGFloat, forPrint: Bool, baseURL: URL?) {
+            self.theme = theme; self.size = size; self.forPrint = forPrint; self.baseURL = baseURL
             self.ink = forPrint ? NSColor.black : theme.text
         }
 
@@ -60,6 +63,11 @@ enum MarkdownRenderer {
 
                 // Horizontal rule.
                 if isRule(trimmed) { appendRule(); i += 1; continue }
+
+                // Image on its own line.
+                if let img = imageOnly(trimmed) {
+                    appendImage(path: img.path, alt: img.alt); i += 1; continue
+                }
 
                 // Table: header row + separator row.
                 if trimmed.contains("|"), i + 1 < lines.count,
@@ -198,6 +206,64 @@ enum MarkdownRenderer {
             ]))
         }
 
+        private func appendImage(path: String, alt: String) {
+            out.append(imageString(path: path, alt: alt, block: true))
+            out.append(NSAttributedString(string: "\n"))
+        }
+
+        /// Build a centered image attachment (or a captioned placeholder when the
+        /// file can't be loaded). Local relative paths resolve against `baseURL`.
+        private func imageString(path: String, alt: String, block: Bool) -> NSAttributedString {
+            if let url = resolveImage(path), let img = NSImage(contentsOf: url) {
+                let att = NSTextAttachment()
+                att.image = img
+                var s = img.size
+                let maxW: CGFloat = forPrint ? 300 : 600
+                if s.width > maxW, s.width > 0 { let k = maxW / s.width; s = NSSize(width: maxW, height: s.height * k) }
+                if s.width <= 0 || s.height <= 0 { s = NSSize(width: 220, height: 140) }
+                att.bounds = CGRect(origin: .zero, size: s)
+                let a = NSMutableAttributedString(attachment: att)
+                if block {
+                    let p = NSMutableParagraphStyle()
+                    p.alignment = .center
+                    p.paragraphSpacingBefore = size * 0.5
+                    p.paragraphSpacing = size * 0.7
+                    a.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: a.length))
+                }
+                return a
+            }
+            // Couldn't load it — show a labeled placeholder so nothing is lost.
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: Typeface.serifItalic(size),
+                .foregroundColor: forPrint ? NSColor.gray : theme.faint,
+            ]
+            if block {
+                let p = NSMutableParagraphStyle(); p.alignment = .center
+                p.paragraphSpacing = size * 0.6; attrs[.paragraphStyle] = p
+            }
+            return NSAttributedString(string: "🖼 " + (alt.isEmpty ? path : alt), attributes: attrs)
+        }
+
+        /// Resolve a local image reference; remote URLs are skipped (no network).
+        private func resolveImage(_ path: String) -> URL? {
+            let t = path.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("http://") || t.hasPrefix("https://") { return nil }
+            if t.hasPrefix("file://") { return URL(string: t) }
+            if t.hasPrefix("/") { return URL(fileURLWithPath: t) }
+            guard let base = baseURL else { return nil }
+            // appendingPathComponent + standardize resolves "../" and is robust
+            // whether or not `base` carries a trailing slash.
+            return base.appendingPathComponent(t).standardizedFileURL
+        }
+
+        /// A line that is *only* an image: `![alt](path)`.
+        private func imageOnly(_ t: String) -> (alt: String, path: String)? {
+            guard t.hasPrefix("!["), t.hasSuffix(")"), let mid = t.range(of: "](") else { return nil }
+            let alt = String(t[t.index(t.startIndex, offsetBy: 2)..<mid.lowerBound])
+            let path = String(t[mid.upperBound..<t.index(before: t.endIndex)])
+            return path.isEmpty || alt.contains("](") ? nil : (alt, path)
+        }
+
         private func appendTable(_ rows: [String]) {
             let cells = rows.enumerated()
                 .filter { $0.offset != 1 }              // drop the |---| separator
@@ -302,6 +368,17 @@ enum MarkdownRenderer {
                     sAttrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                     result.append(NSAttributedString(string: content, attributes: sAttrs))
                     i = j + 2; continue
+                }
+
+                // Inline image ![alt](path).
+                if c == "!", i + 1 < chars.count, chars[i + 1] == "[",
+                   let close = find(["]"], from: i + 2), close + 1 < chars.count, chars[close + 1] == "(",
+                   let paren = find([")"], from: close + 2) {
+                    flushRun()
+                    let alt = String(chars[(i + 2)..<close])
+                    let path = String(chars[(close + 2)..<paren])
+                    result.append(imageString(path: path, alt: alt, block: false))
+                    i = paren + 1; continue
                 }
 
                 // Link [text](url).

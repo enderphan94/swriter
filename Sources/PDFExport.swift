@@ -9,8 +9,10 @@ enum PDFExport {
     static let pageSize = CGSize(width: 419.53, height: 595.28)
     static let margin = NSEdgeInsets(top: 60, left: 54, bottom: 66, right: 54)
 
-    static func write(markdown: String, title: String, theme: WriterTheme, to url: URL) throws {
-        let attr = MarkdownRenderer.attributed(markdown, theme: theme, bodySize: 11.5, forPrint: true)
+    static func write(markdown: String, title: String, theme: WriterTheme,
+                      baseURL: URL?, to url: URL) throws {
+        let attr = MarkdownRenderer.attributed(markdown, theme: theme, bodySize: 11.5,
+                                               forPrint: true, baseURL: baseURL)
 
         let storage = NSTextStorage(attributedString: attr)
         let layout = NSLayoutManager()
@@ -101,7 +103,8 @@ extension AppStore {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            try PDFExport.write(markdown: text, title: documentTitle, theme: theme, to: url)
+            try PDFExport.write(markdown: text, title: documentTitle, theme: theme,
+                                baseURL: currentURL?.deletingLastPathComponent(), to: url)
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {
             let alert = NSAlert(error: error)

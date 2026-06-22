@@ -138,6 +138,40 @@ struct Vault {
         return dst
     }
 
+    /// Move a note or folder into `dir`, renaming on collision. Returns the new URL.
+    @discardableResult
+    func move(_ item: VaultItem, into dir: URL) throws -> URL {
+        let name = item.url.lastPathComponent
+        var dst = dir.appendingPathComponent(name)
+        if fm.fileExists(atPath: dst.path) {
+            let ext = item.isDirectory ? nil : "md"
+            let base = item.isDirectory ? name : (name as NSString).deletingPathExtension
+            dst = unique(in: dir, base: base, ext: ext)
+        }
+        try fm.moveItem(at: item.url, to: dst)
+        return dst
+    }
+
+    /// Save image bytes into `<vault>/assets/` and return a Markdown path
+    /// relative to the note's folder (so it resolves from the note).
+    func saveImage(_ data: Data, ext: String, base: String, noteURL: URL) throws -> String {
+        let assets = root.appendingPathComponent("assets", isDirectory: true)
+        try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+        let url = unique(in: assets, base: NameUtil.slug(base), ext: ext)
+        try data.write(to: url, options: .atomic)
+        return Vault.relativePath(from: noteURL.deletingLastPathComponent(), to: url)
+    }
+
+    /// A POSIX relative path from `base` to `target` (e.g. "../assets/img.png").
+    static func relativePath(from base: URL, to target: URL) -> String {
+        let b = base.standardizedFileURL.pathComponents
+        let t = target.standardizedFileURL.pathComponents
+        var i = 0
+        while i < b.count, i < t.count, b[i] == t[i] { i += 1 }
+        let ups = Array(repeating: "..", count: max(0, b.count - i))
+        return (ups + t[i...]).joined(separator: "/")
+    }
+
     func read(_ url: URL) -> String {
         (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }

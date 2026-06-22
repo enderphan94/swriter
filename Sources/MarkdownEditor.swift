@@ -12,6 +12,8 @@ struct MarkdownEditor: NSViewRepresentable {
     let focusMode: Bool
     var onChange: (String) -> Void
     var onActivate: (NSTextView?) -> Void
+    /// Returns Markdown to insert when an image is pasted, or nil to paste normally.
+    var onImagePaste: (NSPasteboard) -> String? = { _ in nil }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -41,6 +43,7 @@ struct MarkdownEditor: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.textContainer?.lineFragmentPadding = 4
         tv.delegate = context.coordinator
+        tv.imageInserter = onImagePaste
         tv.string = initialText
 
         scroll.documentView = tv
@@ -142,10 +145,26 @@ struct MarkdownEditor: NSViewRepresentable {
 /// reading width of a printed page.
 final class WriterTextView: NSTextView {
     var measure: CGFloat = 720
+    /// Set on the editor instance: turns a pasted image into Markdown + a saved file.
+    var imageInserter: ((NSPasteboard) -> String?)?
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         refreshInset()
+    }
+
+    /// Intercept paste: if the clipboard holds an image, save it and insert a
+    /// Markdown reference instead of dumping raw image data.
+    override func paste(_ sender: Any?) {
+        if isEditable, let inserter = imageInserter, let md = inserter(NSPasteboard.general) {
+            let r = selectedRange()
+            guard shouldChangeText(in: r, replacementString: md) else { return }
+            textStorage?.replaceCharacters(in: r, with: md)
+            didChangeText()
+            setSelectedRange(NSRange(location: r.location + (md as NSString).length, length: 0))
+            return
+        }
+        super.paste(sender)
     }
 
     func refreshInset() {

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 /// What the main pane shows.
 enum Mode: String, CaseIterable { case write, split, read }
@@ -274,6 +275,79 @@ final class AppStore: ObservableObject {
         return p.hasPrefix(root)
             ? String(p.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             : url.lastPathComponent
+    }
+
+    /// Move a dragged item into a folder (nil = vault root). Rejects dropping a
+    /// folder into itself or a descendant, and no-op same-folder drops.
+    func move(_ draggedID: String, intoFolderID folderID: String?) {
+        guard let v = vault, let item = findItem(draggedID) else { return }
+        let destDir = folderID.flatMap { findItem($0)?.url } ?? v.root
+        let dest = destDir.standardizedFileURL.path
+        let src = item.url.standardizedFileURL.path
+
+        if item.url.deletingLastPathComponent().standardizedFileURL.path == dest { return } // already here
+        if item.isDirectory, dest == src || dest.hasPrefix(src + "/") { NSSound.beep(); return }
+
+        let openInside = currentURL.map { $0.path == src || $0.path.hasPrefix(src + "/") } ?? false
+        guard let newURL = try? v.move(item, into: destDir) else { NSSound.beep(); return }
+
+        if let folderID { expandedFolders.insert(folderID); saveExpanded() }
+        if openInside, let cur = currentURL {
+            let moved = URL(fileURLWithPath: cur.path.replacingOccurrences(of: src, with: newURL.path))
+            currentURL = moved; docID = moved.path
+        }
+        refreshTree()
+    }
+
+    // MARK: Images
+
+    /// Paste handler: if the pasteboard holds an image, save it into the vault
+    /// and return the Markdown to insert; otherwise nil (normal paste proceeds).
+    func insertImageFromPasteboard(_ pb: NSPasteboard) -> String? {
+        guard let note = currentURL, let (data, ext) = Self.imageData(from: pb) else { return nil }
+        return snippet(forImageData: data, ext: ext, base: "image", note: note)
+    }
+
+    /// "Insert Image…" — copy chosen files into the vault and insert references.
+    func importImage() {
+        guard hasDocument, let note = currentURL, let tv = activeTextView else { NSSound.beep(); return }
+        let panel = NSOpenPanel()
+        panel.title = "Insert Image"
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return }
+        let snippets = panel.urls.compactMap { url -> String? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+            return snippet(forImageData: data, ext: ext,
+                           base: url.deletingPathExtension().lastPathComponent, note: note)
+        }
+        if !snippets.isEmpty { MarkdownFormatter.insertImage(snippets.joined(separator: "\n\n"), into: tv) }
+    }
+
+    private func snippet(forImageData data: Data, ext: String, base: String, note: URL) -> String? {
+        guard let v = vault, let rel = try? v.saveImage(data, ext: ext, base: base, noteURL: note) else { return nil }
+        refreshTree()
+        return "![](\(rel))"
+    }
+
+    /// Pull image bytes from a pasteboard: PNG, TIFF (→PNG), or a copied image file.
+    private static func imageData(from pb: NSPasteboard) -> (Data, String)? {
+        if let png = pb.data(forType: .png) { return (png, "png") }
+        if let tiff = pb.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) { return (png, "png") }
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let f = urls.first(where: { isImagePath($0.pathExtension) }),
+           let data = try? Data(contentsOf: f) {
+            return (data, f.pathExtension.lowercased())
+        }
+        return nil
+    }
+
+    private static func isImagePath(_ ext: String) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "tiff", "tif", "bmp", "heic", "webp"].contains(ext.lowercased())
     }
 
     // MARK: Sidebar — search, expand, flatten

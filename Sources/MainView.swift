@@ -72,11 +72,13 @@ struct MainView: View {
             fontSize: store.fontSize,
             focusMode: store.focusMode,
             onChange: { store.onTextChanged($0) },
-            onActivate: { store.activeTextView = $0 })
+            onActivate: { store.activeTextView = $0 },
+            onImagePaste: { store.insertImageFromPasteboard($0) })
     }
 
     private var readingView: some View {
-        ReadingView(markdown: store.text, theme: store.theme, bodySize: store.fontSize)
+        ReadingView(markdown: store.text, theme: store.theme, bodySize: store.fontSize,
+                    baseURL: store.currentURL?.deletingLastPathComponent())
             .frame(maxWidth: .infinity)
     }
 
@@ -186,6 +188,7 @@ struct FormattingBar: View {
                 btn("text.quote", "Quote (⇧⌘')") { store.format(.quote) }
                 bar
                 btn("link", "Link (⌘K)") { store.format(.link) }
+                btn("photo", "Insert Image") { store.importImage() }
                 btn("tablecells", "Insert Table") { store.format(.table) }
                 btn("curlybraces", "Code Block") { store.format(.codeBlock) }
                 btn("minus", "Horizontal Rule") { store.format(.horizontalRule) }

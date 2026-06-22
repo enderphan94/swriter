@@ -32,8 +32,12 @@ There is no account, no cloud service, and no tracking.
   numbers, ready for book printing.
 - **Vault** — a folder of `.md` files with a tree sidebar. Right-click for New
   Note / New Folder / Rename / Duplicate / Reveal in Finder / Move to Trash;
-  double-click to rename inline; search, sort (name / modified / created), and
+  double-click to rename inline; **drag a note or folder onto another folder (or
+  the root) to move it**; search, sort (name / modified / created), and
   expand-or-collapse all.
+- **Images** — paste an image straight into a note, or **Insert Image…** to pick
+  files. They're copied into an `assets/` folder in the vault and rendered
+  inline in Reading mode, the Split preview, and the exported PDF.
 - **Switch vaults in-app** — a workspace dropdown in the sidebar header to
   switch between vaults, add or create new ones, rename, or remove one from the
   list (which only forgets the pointer — your files are never deleted).

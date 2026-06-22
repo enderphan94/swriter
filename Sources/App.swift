@@ -78,6 +78,8 @@ struct SwriterApp: App {
             Divider()
             Button("Link…") { store.format(.link) }
                 .keyboardShortcut("k", modifiers: .command)
+            Button("Insert Image…") { store.importImage() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
             Button("Insert Table") { store.format(.table) }
             Button("Code Block") { store.format(.codeBlock) }
             Button("Horizontal Rule") { store.format(.horizontalRule) }

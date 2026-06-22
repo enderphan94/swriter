@@ -14,6 +14,11 @@ enum FormatAction: Equatable {
 /// `shouldChangeText` / `didChangeText`).
 enum MarkdownFormatter {
 
+    /// Insert image Markdown on its own line(s) at the cursor.
+    static func insertImage(_ snippet: String, into tv: NSTextView) {
+        insertBlock(tv, snippet)
+    }
+
     static func apply(_ action: FormatAction, to tv: NSTextView) {
         switch action {
         case .bold:          wrap(tv, "**", "**", placeholder: "bold text")

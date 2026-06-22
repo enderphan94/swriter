@@ -7,6 +7,7 @@ struct ReadingView: NSViewRepresentable {
     let markdown: String
     let theme: WriterTheme
     let bodySize: CGFloat
+    var baseURL: URL? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -39,10 +40,13 @@ struct ReadingView: NSViewRepresentable {
         return scroll
     }
 
+    private var renderKey: String {
+        "\(markdown.hashValue)|\(theme.rawValue)|\(bodySize)|\(baseURL?.path ?? "")"
+    }
+
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = context.coordinator.textView else { return }
-        let key = "\(markdown.hashValue)|\(theme.rawValue)|\(bodySize)"
-        if context.coordinator.lastKey != key {
+        if context.coordinator.lastKey != renderKey {
             render(into: tv, scroll: scroll, context: context)
         }
     }
@@ -50,10 +54,11 @@ struct ReadingView: NSViewRepresentable {
     private func render(into tv: WriterTextView, scroll: NSScrollView, context: Context) {
         tv.backgroundColor = theme.background
         scroll.backgroundColor = theme.background
-        let attr = MarkdownRenderer.attributed(markdown, theme: theme, bodySize: bodySize, forPrint: false)
+        let attr = MarkdownRenderer.attributed(markdown, theme: theme, bodySize: bodySize,
+                                               forPrint: false, baseURL: baseURL)
         tv.textStorage?.setAttributedString(attr)
         tv.refreshInset()
-        context.coordinator.lastKey = "\(markdown.hashValue)|\(theme.rawValue)|\(bodySize)"
+        context.coordinator.lastKey = renderKey
         tv.scroll(.zero)
     }
 

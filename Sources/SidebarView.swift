@@ -1,15 +1,18 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// The vault browser, modeled on MarkView: a workspace switcher, header tools
 /// (new note/folder, search, sort, expand/collapse), and a tree with inline
-/// rename, double-click-to-rename, and a full right-click menu.
+/// rename, double-click-to-rename, drag-to-move, and a full right-click menu.
 struct SidebarView: View {
     @EnvironmentObject var store: AppStore
 
     @State private var renamingID: String?
     @State private var renameText = ""
     @FocusState private var renameFocused: Bool
+    /// Folder id (or "__root__") currently highlighted as a drop target.
+    @State private var dropTargetID: String?
 
     @State private var searchVisible = false
     @FocusState private var searchFocused: Bool
@@ -109,19 +112,26 @@ struct SidebarView: View {
                                                   bottom: 1, trailing: 6))
                         .listRowBackground(rowBackground(row.item))
                 }
-                Color.clear.frame(height: 16)
+                Color.clear.frame(height: 44)
                     .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                    .listRowBackground(dropTargetID == "__root__"
+                                       ? store.theme.accentColor.opacity(0.18) : Color.clear)
                     .contextMenu { rootMenu }
+                    .onDrop(of: [.text], isTargeted: Binding(
+                        get: { dropTargetID == "__root__" },
+                        set: { dropTargetID = $0 ? "__root__" : nil })) { providers in
+                        dropTargetID = nil
+                        return handleDrop(providers, into: nil)
+                    }
             }
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 24)
         }
     }
 
-    private func rowView(_ row: TreeRow) -> some View {
+    @ViewBuilder private func rowView(_ row: TreeRow) -> some View {
         let item = row.item
-        return HStack(spacing: 4) {
+        let base = HStack(spacing: 4) {
             Image(systemName: "chevron.right")
                 .font(.caption2).foregroundStyle(.secondary)
                 .rotationEffect(.degrees((store.isExpanded(item.id) || store.isSearching) && item.isDirectory ? 90 : 0))
@@ -148,11 +158,27 @@ struct SidebarView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { beginRename(id: item.id, name: item.name) }
         .onTapGesture { primaryTap(item) }
+        .onDrag { NSItemProvider(object: item.id as NSString) }
         .contextMenu { itemMenu(item) }
+
+        // Folders (and the root, below) accept drops to move items in.
+        if item.isDirectory {
+            base.onDrop(of: [.text], isTargeted: Binding(
+                get: { dropTargetID == item.id },
+                set: { dropTargetID = $0 ? item.id : nil })) { providers in
+                dropTargetID = nil
+                return handleDrop(providers, into: item.id)
+            }
+        } else {
+            base
+        }
     }
 
     private func rowBackground(_ item: VaultItem) -> some View {
-        (store.currentURL == item.url ? store.theme.accentColor.opacity(0.16) : Color.clear)
+        let dropping = dropTargetID == item.id
+        let active = store.currentURL == item.url
+        return dropping ? store.theme.accentColor.opacity(0.30)
+            : active ? store.theme.accentColor.opacity(0.16) : Color.clear
     }
 
     private var emptyState: some View {
@@ -170,6 +196,16 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .contextMenu { rootMenu }
+        .onDrop(of: [.text], isTargeted: nil) { providers in handleDrop(providers, into: nil) }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider], into folderID: String?) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let id = obj as? String else { return }
+            DispatchQueue.main.async { store.move(id, intoFolderID: folderID) }
+        }
+        return true
     }
 
     // MARK: Context menus
