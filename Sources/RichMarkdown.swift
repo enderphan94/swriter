@@ -23,6 +23,7 @@ enum RichMarkdown {
         static let strike = NSAttributedString.Key("swStrike")
         static let code = NSAttributedString.Key("swCode")       // inline code
         static let indent = NSAttributedString.Key("swIndent")   // list depth (Int)
+        static let number = NSAttributedString.Key("swNumber")   // ordered-list number (Int)
         static let lang = NSAttributedString.Key("swLang")       // code-fence language
         static let imagePath = NSAttributedString.Key("swImagePath")
         static let imageAlt = NSAttributedString.Key("swImageAlt")
@@ -159,10 +160,10 @@ enum RichMarkdown {
                                 block: .quote, theme: theme, size: size)
                 i += 1; continue
             }
-            if let (ordered, depth, text) = listItem(raw) {
+            if let (ordered, depth, number, text) = listItem(raw) {
                 let block: BlockKind = ordered ? .ordered : .bullet
                 appendParagraph(out, inline: inline(text, theme: theme, size: size, block: block, baseURL: baseURL),
-                                block: block, indent: depth, theme: theme, size: size)
+                                block: block, indent: depth, number: number, theme: theme, size: size)
                 i += 1; continue
             }
             // Paragraph.
@@ -176,7 +177,8 @@ enum RichMarkdown {
     }
 
     private static func appendParagraph(_ out: NSMutableAttributedString, inline body: NSAttributedString,
-                                        block: BlockKind, indent: Int = 0, theme: WriterTheme, size: CGFloat) {
+                                        block: BlockKind, indent: Int = 0, number: Int = 0,
+                                        theme: WriterTheme, size: CGFloat) {
         let para = NSMutableAttributedString(attributedString: body)
         para.append(NSAttributedString(string: "\n"))
         let full = NSRange(location: 0, length: para.length)
@@ -185,6 +187,7 @@ enum RichMarkdown {
             Key.indent: indent,
             .paragraphStyle: paragraphStyle(block, indent: indent, size: size),
         ], range: full)
+        if case .ordered = block { para.addAttribute(Key.number, value: number, range: full) }
         // Default font/colour where the inline pass didn't set one (e.g. empty line).
         para.enumerateAttribute(.font, in: full, options: []) { value, range, _ in
             if value == nil {
@@ -358,8 +361,8 @@ enum RichMarkdown {
     // MARK: Serialize — attributed string → Markdown
 
     static func serialize(_ attr: NSAttributedString) -> String {
-        // Collect paragraphs as (block, lang, indent, inlineMarkdown).
-        struct Para { let block: BlockKind; let lang: String; let indent: Int; let text: String }
+        // Collect paragraphs as (block, lang, indent, number, inlineMarkdown).
+        struct Para { let block: BlockKind; let lang: String; let indent: Int; let number: Int?; let text: String }
         var paras: [Para] = []
         let ns = attr.string as NSString
         ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: .byParagraphs) { _, range, _, _ in
@@ -367,9 +370,10 @@ enum RichMarkdown {
             let block = BlockKind.decode(blockRaw)
             let lang = (attr.attribute(Key.lang, at: range.location, effectiveRange: nil) as? String) ?? ""
             let indent = (attr.attribute(Key.indent, at: range.location, effectiveRange: nil) as? Int) ?? 0
+            let number = attr.attribute(Key.number, at: range.location, effectiveRange: nil) as? Int
             let sub = attr.attributedSubstring(from: range)
             let text = (block == .code || block == .raw) ? sub.string : inlineMarkdown(sub)
-            paras.append(Para(block: block, lang: lang, indent: indent, text: text))
+            paras.append(Para(block: block, lang: lang, indent: indent, number: number, text: text))
         }
 
         var lines: [String] = []
@@ -396,7 +400,9 @@ enum RichMarkdown {
                 lines.append(String(repeating: "  ", count: p.indent) + "- " + p.text)
             case .ordered:
                 orderedCount += 1
-                lines.append(String(repeating: "  ", count: p.indent) + "\(orderedCount). " + p.text)
+                // Respect the explicit number when set; otherwise number in order.
+                let n = p.number ?? orderedCount
+                lines.append(String(repeating: "  ", count: p.indent) + "\(n). " + p.text)
             case .paragraph:
                 lines.append(p.text)
             }
@@ -467,13 +473,13 @@ enum RichMarkdown {
         return String(q)
     }
 
-    private static func listItem(_ line: String) -> (ordered: Bool, depth: Int, text: String)? {
+    private static func listItem(_ line: String) -> (ordered: Bool, depth: Int, number: Int, text: String)? {
         let leading = line.prefix { $0 == " " || $0 == "\t" }
         let depth = leading.reduce(0) { $0 + ($1 == "\t" ? 1 : 0) } + leading.filter { $0 == " " }.count / 2
         let body = line[line.index(line.startIndex, offsetBy: leading.count)...]
         if let f = body.first, f == "-" || f == "*" || f == "+",
            body.count > 1, body[body.index(after: body.startIndex)] == " " {
-            return (false, depth, String(body.dropFirst(2)))
+            return (false, depth, 0, String(body.dropFirst(2)))
         }
         var digits = ""
         for ch in body { if ch.isNumber { digits.append(ch) } else { break } }
@@ -481,7 +487,7 @@ enum RichMarkdown {
             let after = body.dropFirst(digits.count)
             if let sep = after.first, sep == "." || sep == ")", after.count > 1,
                after[after.index(after.startIndex, offsetBy: 1)] == " " {
-                return (true, depth, String(after.dropFirst(2)))
+                return (true, depth, Int(digits) ?? 1, String(after.dropFirst(2)))
             }
         }
         return nil

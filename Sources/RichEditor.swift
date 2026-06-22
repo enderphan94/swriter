@@ -55,6 +55,7 @@ struct RichEditor: NSViewRepresentable {
         tv.baseURL = baseURL
         tv.imageSaver = onImageSave
         tv.onNewline = { [weak coordinator = context.coordinator] in coordinator?.newline() }
+        tv.onContentChanged = { [weak coordinator = context.coordinator] in coordinator?.reserialize() }
 
         scroll.documentView = tv
         context.coordinator.textView = tv
@@ -139,6 +140,12 @@ struct RichEditor: NSViewRepresentable {
             RichFormatter.handleNewline(tv, parent.theme, parent.fontSize)
             parent.onChange(RichMarkdown.serialize(storage))
         }
+
+        /// Re-serialize after an attribute-only change (e.g. "Set Number…").
+        func reserialize() {
+            guard let storage = textView?.textStorage else { return }
+            parent.onChange(RichMarkdown.serialize(storage))
+        }
     }
 }
 
@@ -149,6 +156,7 @@ final class RichTextView: NSTextView {
     var baseURL: URL?
     var imageSaver: ((NSPasteboard) -> String?)?
     var onNewline: (() -> Void)?
+    var onContentChanged: (() -> Void)?
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -196,6 +204,46 @@ final class RichTextView: NSTextView {
         didChangeText()
         setSelectedRange(NSRange(location: r.location + (s as NSString).length, length: 0))
     }
+
+    /// Add "Set Number…" to the context menu when right-clicking an ordered item.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let storage = textStorage, storage.length > 0 else { return menu }
+        let point = convert(event.locationInWindow, from: nil)
+        let index = min(characterIndexForInsertion(at: point), storage.length - 1)
+        let block = RichMarkdown.BlockKind.decode(
+            storage.attribute(RichMarkdown.Key.block, at: index, effectiveRange: nil) as? String)
+        if block == .ordered {
+            let item = NSMenuItem(title: "Set Number…", action: #selector(setListNumber(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = index
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
+        return menu
+    }
+
+    @objc private func setListNumber(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int, let storage = textStorage else { return }
+        let para = (storage.string as NSString).paragraphRange(for: NSRange(location: index, length: 0))
+        let current = (storage.attribute(RichMarkdown.Key.number, at: para.location, effectiveRange: nil) as? Int) ?? 1
+
+        let alert = NSAlert()
+        alert.messageText = "Set Number"
+        alert.informativeText = "Number for this list item:"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 80, height: 24))
+        field.stringValue = "\(current)"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn, let n = Int(field.stringValue) else { return }
+
+        storage.addAttribute(RichMarkdown.Key.number, value: n, range: para)
+        onContentChanged?()           // re-serialize to Markdown
+        layoutManager?.invalidateDisplay(forCharacterRange: para)
+        needsDisplay = true
+    }
 }
 
 /// Draws bullet/number markers for list paragraphs in the left margin. The
@@ -234,8 +282,12 @@ final class RichLayoutManager: NSLayoutManager {
         }
     }
 
-    /// 1-based position of this ordered item within its run of ordered siblings.
+    /// The number to draw for an ordered item: the explicit `.swNumber` it
+    /// carries, or — as a fallback — its 1-based position in the run.
     private func orderedNumber(_ storage: NSTextStorage, _ ns: NSString, at loc: Int) -> Int {
+        if let stored = storage.attribute(RichMarkdown.Key.number, at: loc, effectiveRange: nil) as? Int {
+            return stored
+        }
         var n = 1
         var pos = ns.paragraphRange(for: NSRange(location: loc, length: 0)).location
         while pos > 0 {

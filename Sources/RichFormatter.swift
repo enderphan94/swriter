@@ -91,14 +91,27 @@ enum RichFormatter {
         let paras = ns.paragraphRange(for: tv.selectedRange())
         guard tv.shouldChangeText(in: paras, replacementString: nil) else { return }
         storage.beginEditing()
+        var olNum = startOrderedNumber(storage, ns, before: paras.location)
         ns.enumerateSubstrings(in: paras, options: .byParagraphs) { _, range, _, _ in
             // Toggle off → back to paragraph when the block already matches.
             let current = RichMarkdown.BlockKind.decode(storage.attribute(K.block, at: range.location, effectiveRange: nil) as? String)
             let block = (current == requested) ? .paragraph : requested
             restyle(storage, paragraph: range, block: block, theme: theme, size: size)
+            if block == .ordered {
+                storage.addAttribute(K.number, value: olNum, range: ns.paragraphRange(for: range))
+                olNum += 1
+            }
         }
         storage.endEditing()
         tv.didChangeText()
+    }
+
+    /// Where a new ordered run should start: one past the item above, else 1.
+    private static func startOrderedNumber(_ storage: NSTextStorage, _ ns: NSString, before loc: Int) -> Int {
+        guard loc > 0 else { return 1 }
+        let prev = ns.paragraphRange(for: NSRange(location: loc - 1, length: 0))
+        guard blockAt(storage, prev.location) == .ordered else { return 1 }
+        return ((storage.attribute(K.number, at: prev.location, effectiveRange: nil) as? Int) ?? 0) + 1
     }
 
     /// Re-apply a block's styling to a paragraph, preserving inline emphasis.
@@ -108,6 +121,9 @@ enum RichFormatter {
         let full = ns.paragraphRange(for: range)
         storage.addAttribute(K.block, value: block.encoded, range: full)
         storage.addAttribute(K.indent, value: indent, range: full)
+        // The ordered number only belongs on ordered items; drop it elsewhere
+        // (but leave it untouched when restyling an item that's still ordered).
+        if block != .ordered { storage.removeAttribute(K.number, range: full) }
         storage.addAttribute(.paragraphStyle,
             value: RichMarkdown.paragraphStyle(block, indent: indent, size: size), range: full)
         let color = RichMarkdown.blockColor(block, theme: theme)
@@ -216,15 +232,28 @@ enum RichFormatter {
         default:
             newBlock = .paragraph
         }
+        // Continuing a list inherits its depth; the ordered number steps by one.
+        let prevIndent = (storage.attribute(K.indent, at: prevPara.location, effectiveRange: nil) as? Int) ?? 0
+        let newIndent = (newBlock == .bullet || newBlock == .ordered) ? prevIndent : 0
         let target = ns.paragraphRange(for: NSRange(location: min(tv.selectedRange().location, ns.length), length: 0))
-        restyle(storage, paragraph: target, block: newBlock, theme: theme, size: size)
+        restyle(storage, paragraph: target, block: newBlock, indent: newIndent, theme: theme, size: size)
+
+        var nextNumber: Int? = nil
+        if newBlock == .ordered {
+            let prevNum = (storage.attribute(K.number, at: prevPara.location, effectiveRange: nil) as? Int) ?? 0
+            nextNumber = prevNum + 1
+            storage.addAttribute(K.number, value: prevNum + 1, range: ns.paragraphRange(for: target))
+        }
+
         // Make sure typing continues in the right style.
         var ta = tv.typingAttributes
         ta[K.block] = newBlock.encoded
+        ta[K.indent] = newIndent
         ta[K.bold] = nil; ta[K.italic] = nil; ta[K.code] = nil; ta[K.strike] = nil
+        if let nextNumber { ta[K.number] = nextNumber } else { ta[K.number] = nil }
         ta[.font] = RichMarkdown.font(block: newBlock, bold: false, italic: false, code: false, size: size)
         ta[.foregroundColor] = RichMarkdown.blockColor(newBlock, theme: theme)
-        ta[.paragraphStyle] = RichMarkdown.paragraphStyle(newBlock, indent: 0, size: size)
+        ta[.paragraphStyle] = RichMarkdown.paragraphStyle(newBlock, indent: newIndent, size: size)
         tv.typingAttributes = ta
     }
 
