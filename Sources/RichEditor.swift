@@ -56,6 +56,7 @@ struct RichEditor: NSViewRepresentable {
         tv.imageSaver = onImageSave
         tv.onNewline = { [weak coordinator = context.coordinator] in coordinator?.newline() }
         tv.onContentChanged = { [weak coordinator = context.coordinator] in coordinator?.reserialize() }
+        tv.registerForDraggedTypes(Array(Set(tv.registeredDraggedTypes + [.png, .tiff, .fileURL])))
 
         scroll.documentView = tv
         context.coordinator.textView = tv
@@ -197,6 +198,27 @@ final class RichTextView: NSTextView {
         setSelectedRange(NSRange(location: r.location + att.length, length: 0))
     }
 
+    // MARK: Drag-and-drop of image files (e.g. a dragged screenshot)
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        swPasteboardHasImage(sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        swPasteboardHasImage(sender.draggingPasteboard) ? .copy : super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+        if let saver = imageSaver, swPasteboardHasImage(pb) {
+            let point = convert(sender.draggingLocation, from: nil)
+            let index = min(characterIndexForInsertion(at: point), textStorage?.length ?? 0)
+            setSelectedRange(NSRange(location: index, length: 0))
+            if let path = saver(pb) { insertImage(path: path, alt: ""); return true }
+        }
+        return super.performDragOperation(sender)
+    }
+
     private func insertPlain(_ s: String) {
         let r = selectedRange()
         guard shouldChangeText(in: r, replacementString: s) else { return }
@@ -244,6 +266,18 @@ final class RichTextView: NSTextView {
         layoutManager?.invalidateDisplay(forCharacterRange: para)
         needsDisplay = true
     }
+}
+
+/// Whether a pasteboard (clipboard or drag) carries an image — raw image data
+/// or a file with an image extension. Cheap: checks types/URLs, not file bytes.
+func swPasteboardHasImage(_ pb: NSPasteboard) -> Bool {
+    if pb.availableType(from: [.png, .tiff]) != nil { return true }
+    if let urls = pb.readObjects(forClasses: [NSURL.self],
+                                 options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+        let exts: Set<String> = ["png", "jpg", "jpeg", "gif", "tiff", "tif", "bmp", "heic", "webp"]
+        return urls.contains { exts.contains($0.pathExtension.lowercased()) }
+    }
+    return false
 }
 
 /// Draws bullet/number markers for list paragraphs in the left margin. The

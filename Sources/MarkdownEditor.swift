@@ -44,6 +44,7 @@ struct MarkdownEditor: NSViewRepresentable {
         tv.textContainer?.lineFragmentPadding = 4
         tv.delegate = context.coordinator
         tv.imageInserter = onImagePaste
+        tv.registerForDraggedTypes(Array(Set(tv.registeredDraggedTypes + [.png, .tiff, .fileURL])))
         tv.string = initialText
 
         scroll.documentView = tv
@@ -157,14 +158,39 @@ final class WriterTextView: NSTextView {
     /// Markdown reference instead of dumping raw image data.
     override func paste(_ sender: Any?) {
         if isEditable, let inserter = imageInserter, let md = inserter(NSPasteboard.general) {
-            let r = selectedRange()
-            guard shouldChangeText(in: r, replacementString: md) else { return }
-            textStorage?.replaceCharacters(in: r, with: md)
-            didChangeText()
-            setSelectedRange(NSRange(location: r.location + (md as NSString).length, length: 0))
+            insertMarkdown(md)
             return
         }
         super.paste(sender)
+    }
+
+    private func insertMarkdown(_ md: String) {
+        let r = selectedRange()
+        guard shouldChangeText(in: r, replacementString: md) else { return }
+        textStorage?.replaceCharacters(in: r, with: md)
+        didChangeText()
+        setSelectedRange(NSRange(location: r.location + (md as NSString).length, length: 0))
+    }
+
+    // MARK: Drag-and-drop of image files → Markdown reference
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        swPasteboardHasImage(sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        swPasteboardHasImage(sender.draggingPasteboard) ? .copy : super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+        if let inserter = imageInserter, swPasteboardHasImage(pb) {
+            let point = convert(sender.draggingLocation, from: nil)
+            let index = min(characterIndexForInsertion(at: point), textStorage?.length ?? 0)
+            setSelectedRange(NSRange(location: index, length: 0))
+            if let md = inserter(pb) { insertMarkdown(md); return true }
+        }
+        return super.performDragOperation(sender)
     }
 
     func refreshInset() {
