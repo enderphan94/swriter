@@ -13,6 +13,7 @@ struct RichEditor: NSViewRepresentable {
     let baseURL: URL?
     var onChange: (String) -> Void
     var onActivate: (NSTextView?) -> Void
+    var onResign: (NSTextView) -> Void = { _ in }
     var onImageSave: (NSPasteboard) -> String?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -92,7 +93,7 @@ struct RichEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
-        coordinator.parent.onActivate(nil)
+        if let tv = coordinator.textView { coordinator.parent.onResign(tv) }
     }
 
     private func load(into tv: RichTextView) {

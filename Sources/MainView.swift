@@ -59,6 +59,7 @@ struct MainView: View {
             baseURL: store.currentURL?.deletingLastPathComponent(),
             onChange: { store.onTextChanged($0) },
             onActivate: { store.activeTextView = $0 },
+            onResign: { store.resignActiveTextView($0) },
             onImageSave: { store.savePastedImage($0) })
     }
 
@@ -72,6 +73,7 @@ struct MainView: View {
             focusMode: store.focusMode,
             onChange: { store.onTextChanged($0) },
             onActivate: { store.activeTextView = $0 },
+            onResign: { store.resignActiveTextView($0) },
             onImagePaste: { store.insertImageFromPasteboard($0) })
     }
 

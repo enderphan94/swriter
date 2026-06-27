@@ -12,6 +12,7 @@ struct MarkdownEditor: NSViewRepresentable {
     let focusMode: Bool
     var onChange: (String) -> Void
     var onActivate: (NSTextView?) -> Void
+    var onResign: (NSTextView) -> Void = { _ in }
     /// Returns Markdown to insert when an image is pasted, or nil to paste normally.
     var onImagePaste: (NSPasteboard) -> String? = { _ in nil }
 
@@ -86,7 +87,7 @@ struct MarkdownEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
-        coordinator.parent.onActivate(nil)
+        if let tv = coordinator.textView { coordinator.parent.onResign(tv) }
     }
 
     private func applyChrome(_ tv: WriterTextView, _ scroll: NSScrollView) {

@@ -78,6 +78,14 @@ final class AppStore: ObservableObject {
     /// actions and PDF export can reach the current text.
     weak var activeTextView: NSTextView?
 
+    /// Clear the active editor only if it's still this one. When the editor is
+    /// recreated (e.g. switching Write/Source mode) the new editor registers
+    /// before the old one tears down; clearing unconditionally would null the
+    /// new editor and freeze all formatting. Guarding by identity prevents that.
+    func resignActiveTextView(_ tv: NSTextView) {
+        if activeTextView === tv { activeTextView = nil }
+    }
+
     private let vaultKey = "SwriterVaultPath"
     private let themeKey = "SwriterTheme"
     private let fontKey  = "SwriterFontSize"
