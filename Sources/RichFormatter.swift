@@ -143,11 +143,20 @@ enum RichFormatter {
     static func restyleAll(_ storage: NSTextStorage, theme: WriterTheme, size: CGFloat) {
         let ns = storage.string as NSString
         guard ns.length > 0 else { return }
+        let full = NSRange(location: 0, length: ns.length)
         storage.beginEditing()
-        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: .byParagraphs) { _, range, _, _ in
+        ns.enumerateSubstrings(in: full, options: .byParagraphs) { _, range, _, _ in
             let block = blockAt(storage, range.location)
             let indent = (storage.attribute(K.indent, at: range.location, effectiveRange: nil) as? Int) ?? 0
             restyle(storage, paragraph: range, block: block, indent: indent, theme: theme, size: size)
+        }
+        // Re-render table grids so they pick up the new theme/size.
+        storage.enumerateAttribute(K.tableSource, in: full, options: []) { value, range, _ in
+            guard let src = value as? String,
+                  let att = storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment,
+                  let (image, sz) = RichMarkdown.tableImage(src, theme: theme, size: size) else { return }
+            att.image = image
+            att.bounds = CGRect(origin: .zero, size: sz)
         }
         storage.endEditing()
     }

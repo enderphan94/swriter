@@ -27,6 +27,7 @@ enum RichMarkdown {
         static let lang = NSAttributedString.Key("swLang")       // code-fence language
         static let imagePath = NSAttributedString.Key("swImagePath")
         static let imageAlt = NSAttributedString.Key("swImageAlt")
+        static let tableSource = NSAttributedString.Key("swTableSource") // verbatim Markdown of a rendered table
     }
 
     enum BlockKind: Equatable {
@@ -135,7 +136,21 @@ enum RichMarkdown {
                 continue
             }
 
-            // Table or HTML block → keep verbatim as raw lines.
+            // Table (header + separator + rows) → render as a real grid, but
+            // keep the exact source so saving never alters it. Edit in Source mode.
+            if isTableRow(t), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
+                var rows: [String] = [raw, lines[i + 1]]
+                i += 2
+                while i < lines.count {
+                    let r = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard r.contains("|"), !r.isEmpty else { break }
+                    rows.append(lines[i]); i += 1
+                }
+                appendTable(out, source: rows.joined(separator: "\n"), theme: theme, size: size)
+                continue
+            }
+
+            // HTML or a stray table-ish line → keep verbatim as a raw line.
             if isTableRow(t) || t.hasPrefix("<") {
                 appendBlockLine(out, text: raw, block: .raw, theme: theme, size: size)
                 i += 1
@@ -208,6 +223,59 @@ enum RichMarkdown {
             .paragraphStyle: paragraphStyle(block, indent: 0, size: size),
         ])
         out.append(line)
+    }
+
+    /// A Markdown table as a rendered-grid attachment carrying its exact source.
+    private static func appendTable(_ out: NSMutableAttributedString, source: String,
+                                    theme: WriterTheme, size: CGFloat) {
+        let att = NSTextAttachment()
+        if let (image, sz) = tableImage(source, theme: theme, size: size) {
+            att.image = image
+            att.bounds = CGRect(origin: .zero, size: sz)
+        } else {
+            // Couldn't render — fall back to verbatim raw lines so nothing is lost.
+            for line in source.components(separatedBy: "\n") {
+                appendBlockLine(out, text: line, block: .raw, theme: theme, size: size)
+            }
+            return
+        }
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacingBefore = size * 0.5
+        p.paragraphSpacing = size * 0.6
+        let s = NSMutableAttributedString(attachment: att)
+        s.append(NSAttributedString(string: "\n"))
+        s.addAttributes([Key.block: "table", Key.tableSource: source, .paragraphStyle: p],
+                        range: NSRange(location: 0, length: s.length))
+        out.append(s)
+    }
+
+    /// Render a table's Markdown to a transparent image of an NSTextTable grid,
+    /// reusing the reading-mode renderer so emphasis inside cells shows too.
+    static func tableImage(_ source: String, theme: WriterTheme, size: CGFloat) -> (NSImage, NSSize)? {
+        let attr = MarkdownRenderer.attributed(source, theme: theme, bodySize: size, forPrint: false)
+        guard attr.length > 0 else { return nil }
+        let storage = NSTextStorage(attributedString: attr)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: NSSize(width: 640, height: 1_000_000))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        _ = layout.glyphRange(for: container)            // force layout
+        let used = layout.usedRect(for: container)
+        let sz = NSSize(width: max(1, ceil(used.width)), height: max(1, ceil(used.height)))
+        // Draw into a flipped image context (top-left origin) so TextKit lays the
+        // table out top-down with upright glyphs, then rasterize it now — while
+        // `storage` is still alive — into a static bitmap.
+        let range = NSRange(location: 0, length: layout.numberOfGlyphs)
+        let drawn = NSImage(size: sz, flipped: true) { _ in
+            layout.drawBackground(forGlyphRange: range, at: .zero)
+            layout.drawGlyphs(forGlyphRange: range, at: .zero)
+            return true
+        }
+        guard let tiff = drawn.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        let image = NSImage(size: sz)
+        image.addRepresentation(rep)
+        return (image, sz)
     }
 
     static func blockColor(_ block: BlockKind, theme: WriterTheme) -> NSColor {
@@ -417,6 +485,10 @@ enum RichMarkdown {
         let full = NSRange(location: 0, length: a.length)
         a.enumerateAttributes(in: full, options: []) { at, range, _ in
             if at[.attachment] != nil {
+                if let table = at[Key.tableSource] as? String {   // a rendered table → its exact source
+                    out += table
+                    return
+                }
                 let path = (at[Key.imagePath] as? String) ?? ""
                 let alt = (at[Key.imageAlt] as? String) ?? ""
                 out += "![\(alt)](\(path))"
@@ -495,5 +567,11 @@ enum RichMarkdown {
 
     private static func isTableRow(_ t: String) -> Bool {
         t.hasPrefix("|") && t.dropFirst().contains("|")
+    }
+
+    private static func isTableSeparator(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.contains("|"), t.contains("-") else { return false }
+        return t.allSatisfy { $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }
     }
 }
