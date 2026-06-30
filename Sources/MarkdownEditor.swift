@@ -162,6 +162,14 @@ final class WriterTextView: NSTextView {
             insertMarkdown(md)
             return
         }
+        // Source editor: paste as plain text so Markdown is preserved. Pasting
+        // from apps like Claude puts both the Markdown *and* a rich HTML version
+        // on the clipboard; NSTextView's default prefers the HTML and flattens a
+        // table (dropping its | pipes). Taking the plain string keeps the table.
+        if isEditable, let s = NSPasteboard.general.string(forType: .string) {
+            insertMarkdown(s)
+            return
+        }
         super.paste(sender)
     }
 
